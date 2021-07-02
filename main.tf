@@ -1,10 +1,13 @@
+data "aws_region" "current" {}
+
 module "ecr" {
   source  = "cloudposse/ecr/aws"
-  version = "0.29.2"
+  version = "0.32.2"
   enabled = var.codepipeline_enabled
 
-  attributes          = ["ecr"]
-  scan_images_on_push = var.ecr_scan_images_on_push
+  attributes           = ["ecr"]
+  scan_images_on_push  = var.ecr_scan_images_on_push
+  image_tag_mutability = var.ecr_image_tag_mutability
 
   context = module.this.context
 }
@@ -19,7 +22,7 @@ resource "aws_cloudwatch_log_group" "app" {
 
 module "alb_ingress" {
   source  = "cloudposse/alb-ingress/aws"
-  version = "0.16.1"
+  version = "0.23.0"
 
   vpc_id                       = var.vpc_id
   port                         = var.container_port
@@ -36,10 +39,8 @@ module "alb_ingress" {
   authenticated_priority   = var.alb_ingress_listener_authenticated_priority
   unauthenticated_priority = var.alb_ingress_listener_unauthenticated_priority
 
-  unauthenticated_listener_arns       = var.alb_ingress_unauthenticated_listener_arns
-  unauthenticated_listener_arns_count = var.alb_ingress_unauthenticated_listener_arns_count
-  authenticated_listener_arns         = var.alb_ingress_authenticated_listener_arns
-  authenticated_listener_arns_count   = var.alb_ingress_authenticated_listener_arns_count
+  unauthenticated_listener_arns = var.alb_ingress_unauthenticated_listener_arns
+  authenticated_listener_arns   = var.alb_ingress_authenticated_listener_arns
 
   authentication_type                        = var.authentication_type
   authentication_cognito_user_pool_arn       = var.authentication_cognito_user_pool_arn
@@ -59,7 +60,7 @@ module "alb_ingress" {
 
 module "container_definition" {
   source                       = "cloudposse/ecs-container-definition/aws"
-  version                      = "0.46.2"
+  version                      = "0.57.0"
   container_name               = module.this.id
   container_image              = var.use_ecr_image ? module.ecr.repository_url : var.container_image
   container_memory             = var.container_memory
@@ -79,11 +80,12 @@ module "container_definition" {
   command                      = var.command
   mount_points                 = var.mount_points
   container_depends_on         = local.container_depends_on
+  repository_credentials       = var.container_repo_credentials
 
   log_configuration = var.cloudwatch_log_group_enabled ? {
     logDriver = var.log_driver
     options = {
-      "awslogs-region"        = var.aws_logs_region
+      "awslogs-region"        = coalesce(var.aws_logs_region, data.aws_region.current.name)
       "awslogs-group"         = join("", aws_cloudwatch_log_group.app.*.name)
       "awslogs-stream-prefix" = var.aws_logs_prefix == "" ? module.this.name : var.aws_logs_prefix
     }
@@ -125,7 +127,7 @@ locals {
 
 module "ecs_alb_service_task" {
   source  = "cloudposse/ecs-alb-service-task/aws"
-  version = "0.44.0"
+  version = "0.55.1"
 
   alb_security_group                = var.alb_security_group
   use_alb_security_group            = var.use_alb_security_group
@@ -151,6 +153,8 @@ module "ecs_alb_service_task" {
   volumes                           = var.volumes
   ecs_load_balancers                = local.load_balancers
   deployment_controller_type        = var.deployment_controller_type
+  force_new_deployment              = var.force_new_deployment
+  exec_enabled                      = var.exec_enabled
 
   context = module.this.context
 }
@@ -158,26 +162,30 @@ module "ecs_alb_service_task" {
 module "ecs_codepipeline" {
   enabled = var.codepipeline_enabled
   source  = "cloudposse/ecs-codepipeline/aws"
-  version = "0.19.0"
+  version = "0.27.0"
 
-  region                = var.region
-  github_oauth_token    = var.github_oauth_token
-  github_anonymous      = var.github_webhooks_anonymous
-  github_webhooks_token = var.github_webhooks_token
-  github_webhook_events = var.github_webhook_events
-  repo_owner            = var.repo_owner
-  repo_name             = var.repo_name
-  branch                = var.branch
-  badge_enabled         = var.badge_enabled
-  build_image           = var.build_image
-  build_compute_type    = var.codepipeline_build_compute_type
-  build_timeout         = var.build_timeout
-  buildspec             = var.buildspec
-  image_repo_name       = module.ecr.repository_name
-  service_name          = module.ecs_alb_service_task.service_name
-  ecs_cluster_name      = var.ecs_cluster_name
-  privileged_mode       = true
-  poll_source_changes   = var.poll_source_changes
+  region                      = coalesce(var.region, data.aws_region.current.name)
+  github_oauth_token          = var.github_oauth_token
+  github_webhooks_token       = var.github_webhooks_token
+  github_webhook_events       = var.github_webhook_events
+  repo_owner                  = var.repo_owner
+  repo_name                   = var.repo_name
+  branch                      = var.branch
+  badge_enabled               = var.badge_enabled
+  build_image                 = var.build_image
+  build_compute_type          = var.codepipeline_build_compute_type
+  build_timeout               = var.build_timeout
+  buildspec                   = var.buildspec
+  cache_bucket_suffix_enabled = var.codepipeline_build_cache_bucket_suffix_enabled
+  image_repo_name             = module.ecr.repository_name
+  service_name                = module.ecs_alb_service_task.service_name
+  ecs_cluster_name            = var.ecs_cluster_name
+  privileged_mode             = true
+  poll_source_changes         = var.poll_source_changes
+
+  secondary_artifact_bucket_id          = var.codepipeline_cdn_bucket_id
+  secondary_artifact_encryption_enabled = var.codepipeline_cdn_bucket_encryption_enabled
+  secondary_artifact_identifier         = var.codepipeline_cdn_bucket_buildspec_identifier
 
   webhook_enabled             = var.webhook_enabled
   webhook_target_action       = var.webhook_target_action
@@ -193,6 +201,7 @@ module "ecs_codepipeline" {
       {
         name  = "CONTAINER_NAME"
         value = module.this.id
+        type  = "PLAINTEXT"
       }
     ]
   )
@@ -203,7 +212,7 @@ module "ecs_codepipeline" {
 module "ecs_cloudwatch_autoscaling" {
   enabled               = var.autoscaling_enabled
   source                = "cloudposse/ecs-cloudwatch-autoscaling/aws"
-  version               = "0.5.1"
+  version               = "0.7.0"
   name                  = var.name
   namespace             = var.namespace
   stage                 = var.stage
@@ -227,7 +236,7 @@ locals {
 
 module "ecs_cloudwatch_sns_alarms" {
   source  = "cloudposse/ecs-cloudwatch-sns-alarms/aws"
-  version = "0.8.1"
+  version = "0.12.1"
   enabled = var.ecs_alarms_enabled
 
   cluster_name = var.ecs_cluster_name
@@ -290,7 +299,7 @@ module "ecs_cloudwatch_sns_alarms" {
 
 module "alb_target_group_cloudwatch_sns_alarms" {
   source  = "cloudposse/alb-target-group-cloudwatch-sns-alarms/aws"
-  version = "0.13.0"
+  version = "0.15.0"
   enabled = var.alb_target_group_alarms_enabled
 
   alarm_actions                  = var.alb_target_group_alarms_alarm_actions

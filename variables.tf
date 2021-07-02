@@ -1,12 +1,31 @@
 variable "region" {
   type        = string
   description = "AWS Region for S3 bucket"
+  default     = null
 }
 
 variable "codepipeline_enabled" {
   type        = bool
   description = "A boolean to enable/disable AWS Codepipeline and ECR"
   default     = true
+}
+
+variable "codepipeline_cdn_bucket_id" {
+  type        = string
+  default     = null
+  description = "Optional bucket for static asset deployment. If specified, the buildspec must include a secondary artifacts section which controls the files deployed to the bucket [For more info](http://docs.aws.amazon.com/codebuild/latest/userguide/build-spec-ref.html)"
+}
+
+variable "codepipeline_cdn_bucket_encryption_enabled" {
+  type        = bool
+  default     = false
+  description = "If set to true, enable encryption on the optional CDN asset deployment bucket"
+}
+
+variable "codepipeline_cdn_bucket_buildspec_identifier" {
+  type        = string
+  default     = null
+  description = "Identifier for buildspec section controlling the optional CDN asset deployment."
 }
 
 variable "use_ecr_image" {
@@ -19,6 +38,12 @@ variable "container_image" {
   type        = string
   description = "The default container image to use in container definition"
   default     = "cloudposse/default-backend"
+}
+
+variable "container_repo_credentials" {
+  type        = map(string)
+  default     = null
+  description = "Container repository credentials; required when using a private repo. This map currently supports a single key; \"credentialsParameter\", which should be the ARN of a Secrets Manager's secret holding the credentials"
 }
 
 variable "ecr_scan_images_on_push" {
@@ -422,6 +447,7 @@ variable "vpc_id" {
 variable "aws_logs_region" {
   type        = string
   description = "The region for the AWS Cloudwatch Logs group"
+  default     = null
 }
 
 variable "aws_logs_prefix" {
@@ -433,7 +459,7 @@ variable "aws_logs_prefix" {
 variable "log_retention_in_days" {
   type        = number
   description = "The number of days to retain logs for the log group"
-  default     = null
+  default     = 90
 }
 
 variable "log_driver" {
@@ -462,6 +488,7 @@ variable "ecs_cluster_arn" {
 variable "ecs_cluster_name" {
   type        = string
   description = "The ECS Cluster Name to use in ECS Code Pipeline Deployment step"
+  default     = null
 }
 
 variable "ecs_alarms_cpu_utilization_high_threshold" {
@@ -607,12 +634,6 @@ variable "github_webhooks_token" {
   default     = ""
 }
 
-variable "github_webhooks_anonymous" {
-  type        = bool
-  default     = false
-  description = "Github Anonymous API (if `true`, token must not be set as GITHUB_TOKEN or `github_webhooks_token`)"
-}
-
 variable "github_webhook_events" {
   type        = list(string)
   description = "A list of events which should trigger the webhook. See a list of [available events](https://developer.github.com/v3/activity/events/types/)"
@@ -654,10 +675,11 @@ variable "build_environment_variables" {
     {
       name  = string
       value = string
+      type  = string
   }))
 
   default     = []
-  description = "A list of maps, that contain both the key 'name' and the key 'value' to be used as additional environment variables for the build"
+  description = "A list of maps, that contain the keys 'name', 'value', and 'type' to be used as additional environment variables for the build. Valid types are 'PLAINTEXT', 'PARAMETER_STORE', or 'SECRETS_MANAGER'"
 }
 
 variable "build_timeout" {
@@ -805,9 +827,9 @@ variable "authentication_cognito_user_pool_domain" {
 }
 
 variable "authentication_cognito_scope" {
-  type        = list(string)
-  description = "Cognito scope"
-  default     = []
+  type        = string
+  description = "Cognito scope, which should be a space separated string of requested scopes (see https://openid.net/specs/openid-connect-core-1_0.html#ScopeClaims)"
+  default     = null
 }
 
 variable "authentication_oidc_client_id" {
@@ -847,9 +869,15 @@ variable "authentication_oidc_user_info_endpoint" {
 }
 
 variable "authentication_oidc_scope" {
-  type        = list(string)
-  description = "OIDC scope"
-  default     = []
+  type        = string
+  description = "OIDC scope, which should be a space separated string of requested scopes (see https://openid.net/specs/openid-connect-core-1_0.html#ScopeClaims, and https://developers.google.com/identity/protocols/oauth2/openid-connect#scope-param for an example set of scopes when using Google as the IdP)"
+  default     = null
+}
+
+variable "codepipeline_build_cache_bucket_suffix_enabled" {
+  type        = bool
+  description = "The codebuild cache bucket generates a random 13 character string to generate a unique bucket name. If set to false it uses terraform-null-label's id value. It only works when cache_type is 'S3'"
+  default     = true
 }
 
 variable "codepipeline_build_compute_type" {
@@ -901,4 +929,22 @@ variable "deployment_controller_type" {
   type        = string
   description = "Type of deployment controller. Valid values are CODE_DEPLOY and ECS"
   default     = "ECS"
+}
+
+variable "ecr_image_tag_mutability" {
+  type        = string
+  default     = "IMMUTABLE"
+  description = "The tag mutability setting for the ecr repository. Must be one of: `MUTABLE` or `IMMUTABLE`"
+}
+
+variable "force_new_deployment" {
+  type        = bool
+  description = "Enable to force a new task deployment of the service."
+  default     = false
+}
+
+variable "exec_enabled" {
+  type        = bool
+  description = "Specifies whether to enable Amazon ECS Exec for the tasks within the service"
+  default     = false
 }
